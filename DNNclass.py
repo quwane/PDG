@@ -83,6 +83,44 @@ class Holograph(nn.Module):
         output = torch.square(torch.abs(input))
         return output
 
+class ParaHolograph(nn.Module):
+    def __init__(self, args):
+        super(Holograph, self).__init__()
+        self.args = args
+        self.scattering = None
+        self.h = transfer_kernel(z=self.args.distance, wavelength=self.args.wavelength,N=self.args.n_numx, pixel_size=self.args.pixel_size,
+                                 bandlimit=True, gpu=True)
+        self.phase = nn.Parameter(0.0 * torch.randn(args.num_layers, args.n_numx, args.n_numy), requires_grad=True)
+        self.weight = nn.Parameter(torch.randn(args.num_layer - 1), require_grad = True)
+    def forward(self, input_or):
+        for idx in range(self.args.num_layers):
+            input = modulation(self.args, input_or, self.phase[idx, :, :])
+            input = diffraction(input, self.h, self.scattering)
+            if self.args.detector_noise is True:
+                input = torch.square(torch.abs(input)).view(input.size(0), -1)
+                input_std = torch.std(input, dim=1, keepdim=True)
+                noise = np.sqrt(self.args.det_noise_level) * torch.randn(input.size())
+                input = torch.abs(input / input_std + noise)
+                input = torch.sqrt(input).view(input.size(0, self.args.n_numx, self.args.n_numy))
+            else:
+                # input = torch.abs(input).view(input.size(0), -1)
+                # input_std = torch.std(input, dim=1, keepdim=True)
+                # input = torch.abs(input / input_std)
+                # input = torch.sqrt(input).view(input.size(0), self.args.n_numx, self.args.n_numy)
+                input = torch.abs(input)
+            max_feature, _ = input.view(128, -1).max(dim=1)
+            input = input / max_feature
+            input = input.view(input_or.shape)
+            if idx == 0:
+                output_temp = input
+            else:
+                output_temp = self.weight[idx] * input + output_temp
+        output_temp = torch.sigmoid(output_temp)
+        output_temp = modulation(self.args, output_temp, self.phase[idx, :, :])
+        output_temp = diffraction(output_temp, self.h, self.scattering)
+        output = torch.square(torch.abs(output_temp))
+        return output
+    
 class Holograph_hybrid(nn.Module):
     def __init__(self, args, input_dim, hidden_dim, dropout_prob, output_dim):
         super(Holograph_hybrid, self).__init__()
@@ -126,3 +164,4 @@ class Holograph_hybrid(nn.Module):
         # out = self.dropout(out)
         out = self.sigmoid(self.fc2(out))  # Output layer
         return out
+    
